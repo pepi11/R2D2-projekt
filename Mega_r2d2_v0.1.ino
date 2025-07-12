@@ -18,14 +18,18 @@ bool wasCrossPressed = false;
 long pozycja_k = 0;
 
 #define PIN_A12 66  // zasilanie off
+const int czujnikPin = 34;  // szczelinowy
 
 void setup() {
   Serial.begin(115200);
   delay(20);
   Serial2.begin(115200);
   delay(20);
+
   pinMode(PIN_A12, OUTPUT);
   digitalWrite(PIN_A12, HIGH);  // podtrzymanie zasilania
+  
+  pinMode(czujnikPin, INPUT); // czujnik
 
   motorL.setMaxSpeed(1000);
   motorL.setAcceleration(500);
@@ -36,18 +40,38 @@ void setup() {
   motorK.setMaxSpeed(1000);
   motorK.setAcceleration(500);
   motorK.disableOutputs();
+  // niepewny start pada
+  //-----------------------------------------------
+  const int MAX_PROBY = 6;
+  int proba = 0;
+  bool padOK = false;
 
-  error = ps2x.config_gamepad(15, 11, 10, 12, true, true);
+  while (proba < MAX_PROBY) {
+    error = ps2x.config_gamepad(15, 11, 10, 12, true, true);
+    if (error == 0) {
+      padOK = true;
+      break;
+    }
+    proba++;
+    Serial.print("Próba połączenia z padem: ");
+    Serial.println(proba);
+    delay(100);
+  }
 
-  if (error == 0) {
+  if (padOK) {
     Serial.println("Pad OK");
   } else {
-    Serial.println("Błąd pada");
+    Serial.println("Nie udało się połączyć z padem!");
+    delay(20);
+    // reset:
+    asm volatile("  jmp 0");  // dla AVR
   }
-  Serial.println("Gotowe");
+  // procedury startowe
+  autostart();
 }
 
 void loop() {
+
   if (millis() - lastRead >= 10) {
     ps2x.read_gamepad(false, 0);
     lastRead = millis();
@@ -79,7 +103,7 @@ void loop() {
     wasSquarePressed = false;
   }
 
-  // Krzyżyk – po puszczeniu ustaw pin A12 na LOW
+  // Krzyżyk – po puszczeniu ustaw pin A12 na LOW // power off
   if (ps2x.Button(PSB_CROSS)) {
     wasCrossPressed = true;
   } else if (wasCrossPressed) {
@@ -88,7 +112,25 @@ void loop() {
     wasCrossPressed = false;
   }
 }
-
+// oczekiwanie na koniec odtwarzania - blokada programu - tymczasowe
+void czekajNaDone() {
+  while (true) {
+    if (Serial2.available()) {
+      String wiadomosc = Serial2.readStringUntil(';');
+      if (wiadomosc == "#SYST:DONE") {
+        wiadomosc = "";
+        break;  // kończymy pętlę, kontynuujemy program
+      }
+    }
+  }
+}
+// -----------Blok autostartu------------
+void autostart() {
+  kopulka_zero();
+  Serial2.println("#SYST:PLAY:1:18;");
+  czekajNaDone();
+  Serial2.println("#R2D2:PLAY:5:12;");
+}
 // ======== FUNKCJA RC PILOT ============
 void rc_pilot() {
   Serial.println("Tryb RC: START");
@@ -145,6 +187,7 @@ void rc_pilot() {
       long aktualnaPozycja = motorK.currentPosition();
       bool dozwolonyRuch = false;
 
+
       if (speed_k > 0 && aktualnaPozycja < 2048) {
         dozwolonyRuch = true;
       } else if (speed_k < 0 && aktualnaPozycja > -2048) {
@@ -167,4 +210,53 @@ void rc_pilot() {
   motorR.disableOutputs();
   motorK.disableOutputs();
   Serial.println("Tryb RC: STOP");
+}
+
+//---------------------------------------
+// ustaw kopulke na zero
+void kopulka_zero() {
+
+  Serial.println("🔁 Szukanie przedniej krawędzi szczeliny...");
+
+  motorK.setSpeed(300);  // obroty w lewo – dostosuj w razie potrzeby
+  motorK.enableOutputs();
+
+  bool krawedzZlapana = false;
+  int ostatniStan = digitalRead(czujnikPin);
+
+  while (!krawedzZlapana) {
+    motorK.runSpeed();
+
+    int aktualnyStan = digitalRead(czujnikPin);
+
+    if (ostatniStan == HIGH && aktualnyStan == LOW) {
+      // Złapano przednią krawędź
+      long pos = motorK.currentPosition();
+      Serial.print("✅ Krawędź wykryta na pozycji: ");
+      Serial.println(pos);
+
+      // Cofnij o 1690 kroków
+      motorK.moveTo(pos - 1690);
+      while (motorK.distanceToGo() != 0) {
+        motorK.run();
+      }
+
+      // Ustaw nowe zero
+      motorK.setCurrentPosition(0);
+      motorK.disableOutputs();
+      Serial.println("🎯 Pozycja zerowa ustawiona.");
+      // Wyczyść śmieci z pada – 30 szybkich odczytów
+      ps2xFlush();
+      krawedzZlapana = true;
+    }
+
+    ostatniStan = aktualnyStan;
+  }
+}
+// czyszczenie bufora pada bo CHRL
+void ps2xFlush() {
+  for (int i = 0; i < 30; i++) {
+    ps2x.read_gamepad(false, 0);
+    delay(2);
+  }
 }
