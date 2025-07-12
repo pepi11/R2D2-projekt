@@ -129,6 +129,6 @@ void play_mp3(const String& path) {
 // koniec pliku mp3
 void audio_eof_mp3(const char* info) {  //end of file
   Serial.print("eof_mp3     ");
-  Serial.println(info);
+  Serial2.println("#SYST:DONE;");
   koniec_mp3 = 1;  // 1 odegrane 0 gramy
 }
