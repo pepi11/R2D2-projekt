@@ -1,7 +1,11 @@
 #include <AccelStepper.h>
 #include <PS2X_lib.h>
+#include "Adafruit_VL53L0X.h"
 
-// 2 silniki: lewy i prawy, kopułka
+Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+
+
+// 3 silniki: lewy i prawy, kopułka
 AccelStepper motorL(AccelStepper::HALF4WIRE, 9, 7, 8, 6);      // lewy
 AccelStepper motorR(AccelStepper::HALF4WIRE, 5, 3, 4, 2);      // prawy
 AccelStepper motorK(AccelStepper::HALF4WIRE, 28, 26, 27, 25);  // kopułka
@@ -17,8 +21,9 @@ bool wasTrianglePressed = false;
 bool wasCrossPressed = false;
 long pozycja_k = 0;
 
-#define PIN_A12 66  // zasilanie off
+#define PIN_A12 66          // zasilanie off
 const int czujnikPin = 34;  // szczelinowy
+
 
 void setup() {
   Serial.begin(115200);
@@ -28,17 +33,17 @@ void setup() {
 
   pinMode(PIN_A12, OUTPUT);
   digitalWrite(PIN_A12, HIGH);  // podtrzymanie zasilania
-  
-  pinMode(czujnikPin, INPUT); // czujnik
+
+  pinMode(czujnikPin, INPUT);  // czujnik
 
   motorL.setMaxSpeed(1000);
-  motorL.setAcceleration(500);
+  motorL.setAcceleration(200);
 
   motorR.setMaxSpeed(1000);
-  motorR.setAcceleration(500);
+  motorR.setAcceleration(200);
 
   motorK.setMaxSpeed(1000);
-  motorK.setAcceleration(500);
+  motorK.setAcceleration(400);
   motorK.disableOutputs();
   // niepewny start pada
   //-----------------------------------------------
@@ -66,8 +71,17 @@ void setup() {
     // reset:
     asm volatile("  jmp 0");  // dla AVR
   }
+
+  Serial.println("Adafruit VL53L0X INIT.");
+  if (!lox.begin()) {
+    Serial.println(F("Failed to boot VL53L0X"));
+    while (1)
+      ;
+  }
+  lox.startRangeContinuous();
   // procedury startowe
   autostart();
+  ps2xFlush();
 }
 
 void loop() {
@@ -111,6 +125,8 @@ void loop() {
     digitalWrite(PIN_A12, LOW);
     wasCrossPressed = false;
   }
+  // pomiar odleglosci
+  
 }
 // oczekiwanie na koniec odtwarzania - blokada programu - tymczasowe
 void czekajNaDone() {
@@ -127,7 +143,7 @@ void czekajNaDone() {
 // -----------Blok autostartu------------
 void autostart() {
   kopulka_zero();
-  Serial2.println("#SYST:PLAY:1:18;");
+  Serial2.println("#SYST:PLAY:1:21;");
   czekajNaDone();
   Serial2.println("#R2D2:PLAY:5:12;");
 }
@@ -135,12 +151,42 @@ void autostart() {
 void rc_pilot() {
   Serial.println("Tryb RC: START");
 
+  bool obiektBlisko = false;
+
+  // Stabilizacja – zapełnienie bufora filtrowanego
+  uint32_t start = millis();
+  while (millis() - start < 300) {
+    odleglosc();  // kilka odczytów, żeby bufor nie był pusty
+    motorL.runSpeed();
+    motorR.runSpeed();
+    motorK.runSpeed();
+  }
+
   while (true) {
-    if (millis() - lastRead >= 10) {
+    //ps2x.read_gamepad(false, 0);
+    if (millis() - lastRead >= 100) {
       ps2x.read_gamepad(false, 0);
-      lastRead = millis();
+      lastRead = millis();}
+    // Detekcja odległości
+    uint16_t dystans = odleglosc();
+
+    // Histereza: tylko raz przy zbliżeniu, reset przy oddaleniu
+    if (dystans < 250 && !obiektBlisko) {
+      Serial2.println("#SYST:PLAY:2:21;");
+      Serial.print("📏 Zbliżenie (");
+      Serial.print(dystans);
+      Serial.println(" mm) – komunikat wysłany");
+      obiektBlisko = true;
     }
-    // Jeśli krzyżyk wciśnięt i puszcony wychodzimy do loop
+
+    if (dystans > 350 && obiektBlisko) {
+      Serial.print("📏 Oddalenie (");
+      Serial.print(dystans);
+      Serial.println(" mm) – reset zatrzasku");
+      obiektBlisko = false;
+    }
+
+    // Wyjście z trybu RC
     if (ps2x.Button(PSB_CROSS)) {
       wasCrossPressed = true;
     }
@@ -149,63 +195,54 @@ void rc_pilot() {
       break;
     }
 
+    // Sterowanie – joystick
     int joyY = ps2x.Analog(PSS_LY);
     int joyX = ps2x.Analog(PSS_LX);
     int joyZ = ps2x.Analog(PSS_RX);
     pozycja_k = motorK.currentPosition();
 
-    // Martwa strefa
     bool neutralY = abs(joyY - 128) < 10;
     bool neutralX = abs(joyX - 128) < 10;
     bool neutralZ = abs(joyZ - 128) < 10;
 
-
-    // Napęd
     if (neutralY && neutralX) {
       motorL.disableOutputs();
       motorR.disableOutputs();
     } else {
       motorL.enableOutputs();
       motorR.enableOutputs();
-
       int speed = map(joyY, 0, 255, 1000, -1000);
       int turn = map(joyX, 0, 255, -1000, 1000);
-
       motorL.setSpeed(speed + turn);
       motorR.setSpeed(speed - turn);
-
-      motorL.runSpeed();
-      motorR.runSpeed();
     }
 
-    // kopulka osobno
     if (neutralZ) {
       motorK.disableOutputs();
       motorK.setSpeed(0);
     } else {
       int speed_k = map(joyZ, 0, 255, 1000, -1000);
       long aktualnaPozycja = motorK.currentPosition();
-      bool dozwolonyRuch = false;
-
-
-      if (speed_k > 0 && aktualnaPozycja < 2048) {
-        dozwolonyRuch = true;
-      } else if (speed_k < 0 && aktualnaPozycja > -2048) {
-        dozwolonyRuch = true;
-      }
+      bool dozwolonyRuch =
+          (speed_k > 0 && aktualnaPozycja < 2048) ||
+          (speed_k < 0 && aktualnaPozycja > -2048);
 
       if (dozwolonyRuch) {
         motorK.enableOutputs();
         motorK.setSpeed(speed_k);
-        motorK.runSpeed();
       } else {
         motorK.disableOutputs();
         motorK.setSpeed(0);
       }
     }
+
+    // 👇 runSpeed() dla płynności
+    motorL.runSpeed();
+    motorR.runSpeed();
+    motorK.runSpeed();
   }
 
-  // Po wyjściu z trybu RC:
+  // Po wyjściu:
   motorL.disableOutputs();
   motorR.disableOutputs();
   motorK.disableOutputs();
@@ -259,4 +296,27 @@ void ps2xFlush() {
     ps2x.read_gamepad(false, 0);
     delay(2);
   }
+}
+// test vl54lox
+#define FILTR_OKNO 5
+
+uint16_t odleglosc() {
+  static uint16_t pomiary[FILTR_OKNO] = {9999};
+  static int index = 0;
+  static uint32_t ostatniPomiar = 0;
+
+  // Odstęp między pomiarami (w ms)
+  if (millis() - ostatniPomiar >= 60 && lox.isRangeComplete()) {
+    uint16_t nowy = lox.readRange();
+    pomiary[index] = nowy;
+    index = (index + 1) % FILTR_OKNO;
+    ostatniPomiar = millis();
+  }
+
+  // Średnia
+  uint32_t suma = 0;
+  for (int i = 0; i < FILTR_OKNO; i++) {
+    suma += pomiary[i];
+  }
+  return suma / FILTR_OKNO;
 }
