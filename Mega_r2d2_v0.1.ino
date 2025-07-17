@@ -1,9 +1,10 @@
 #include <AccelStepper.h>
 #include <PS2X_lib.h>
 #include "Adafruit_VL53L0X.h"
+#include <Adafruit_INA219.h>
 
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
-
+Adafruit_INA219 ina219;
 
 // 3 silniki: lewy i prawy, kopułka
 AccelStepper motorL(AccelStepper::HALF4WIRE, 9, 7, 8, 6);      // lewy
@@ -23,7 +24,10 @@ long pozycja_k = 0;
 
 #define PIN_A12 66          // zasilanie off
 const int czujnikPin = 34;  // szczelinowy
-
+// logika
+String pendingSerial2Command = "";
+bool waitForDone = false;
+int losowanyNumer = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -36,13 +40,13 @@ void setup() {
 
   pinMode(czujnikPin, INPUT);  // czujnik
 
-  motorL.setMaxSpeed(1000);
+  motorL.setMaxSpeed(1200);
   motorL.setAcceleration(200);
 
-  motorR.setMaxSpeed(1000);
+  motorR.setMaxSpeed(1200);
   motorR.setAcceleration(200);
 
-  motorK.setMaxSpeed(1000);
+  motorK.setMaxSpeed(1200);
   motorK.setAcceleration(400);
   motorK.disableOutputs();
   // niepewny start pada
@@ -71,7 +75,7 @@ void setup() {
     // reset:
     asm volatile("  jmp 0");  // dla AVR
   }
-
+  // init vlox
   Serial.println("Adafruit VL53L0X INIT.");
   if (!lox.begin()) {
     Serial.println(F("Failed to boot VL53L0X"));
@@ -79,6 +83,12 @@ void setup() {
       ;
   }
   lox.startRangeContinuous();
+  // init INA
+  if (!ina219.begin()) {
+    Serial.println("Failed to find INA219 chip");
+    while (1)
+      ;
+  }
   // procedury startowe
   autostart();
   ps2xFlush();
@@ -100,6 +110,25 @@ void loop() {
     wasTrianglePressed = false;
   }
 
+  // Kwadrat – wypisz po puszczeniu
+  if (ps2x.Button(PSB_SQUARE)) {
+    wasSquarePressed = true;
+  } else if (wasSquarePressed) {
+    Serial.println("Kwadrat");
+
+    // Jeśli nie trwa odtwarzanie – wysyłaj od razu
+    if (!waitForDone) {
+      Serial2.println("#R2D2:PLAY:4:15;");
+      waitForDone = true;
+    } else {
+      // Jeśli trwa – zapamiętaj do późniejszego wysłania
+      pendingSerial2Command = "#R2D2:PLAY:4:15;";
+      Serial.println("🎵 Polecenie zapamiętane – zostanie wysłane później");
+    }
+
+    wasSquarePressed = false;
+  }
+
   // Kółko – wypisz po puszczeniu
   if (ps2x.Button(PSB_CIRCLE)) {
     wasCirclePressed = true;
@@ -108,14 +137,6 @@ void loop() {
     wasCirclePressed = false;
   }
 
-  // Kwadrat – wypisz po puszczeniu
-  if (ps2x.Button(PSB_SQUARE)) {
-    wasSquarePressed = true;
-  } else if (wasSquarePressed) {
-    Serial.println("Kwadrat");
-    Serial2.println("#R2D2:PLAY:4:15;");
-    wasSquarePressed = false;
-  }
 
   // Krzyżyk – po puszczeniu ustaw pin A12 na LOW // power off
   if (ps2x.Button(PSB_CROSS)) {
@@ -125,28 +146,67 @@ void loop() {
     digitalWrite(PIN_A12, LOW);
     wasCrossPressed = false;
   }
-  // pomiar odleglosci
-  
-}
-// oczekiwanie na koniec odtwarzania - blokada programu - tymczasowe
-void czekajNaDone() {
-  while (true) {
-    if (Serial2.available()) {
-      String wiadomosc = Serial2.readStringUntil(';');
-      if (wiadomosc == "#SYST:DONE") {
-        wiadomosc = "";
-        break;  // kończymy pętlę, kontynuujemy program
+  // pomiar zasilania i sprawdzenie mp3
+  static uint32_t ostatniCheck = 0;
+
+  if (millis() - ostatniCheck >= 1000) {
+    ostatniCheck = millis();
+
+    if (!czekajNaDone()) {
+      Serial.println("✅ Odebrano #SYST:DONE");
+      waitForDone = false;
+
+      // Jeśli mamy polecenie oczekujące – wyślij je teraz
+      if (pendingSerial2Command.length() > 0) {
+        Serial2.println(pendingSerial2Command);
+        Serial.println("📤 Wysłano zaległe polecenie:");
+        Serial.println(pendingSerial2Command);
+        pendingSerial2Command = "";
+        waitForDone = true;
       }
     }
+
+    zasilanie();
   }
 }
+
+// Sprawdzenie czy koniec utworu
+byte czekajNaDone() {
+  static bool done = false;
+
+  if (Serial2.available()) {
+    String wiadomosc = Serial2.readStringUntil(';');
+    if (wiadomosc == "#SYST:DONE") {
+      Serial.println("✅ Odebrano #SYST:DONE");
+      done = true;
+    }
+  }
+
+  if (done) {
+    done = false;
+    return 0;
+  }
+
+  return 1;
+}
 // -----------Blok autostartu------------
+//  --------- mozliwe użycie delay -----
 void autostart() {
   kopulka_zero();
+
   Serial2.println("#SYST:PLAY:1:21;");
-  czekajNaDone();
+  Serial.println("⏳ Czekam na #SYST:DONE (1/12)...");
+  while (czekajNaDone()) {
+    delay(100);
+  }
+
   Serial2.println("#R2D2:PLAY:5:12;");
+  Serial.println("⏳ Czekam na #SYST:DONE (9/12)...");
+  while (czekajNaDone()) {
+    delay(100);
+  }
 }
+
 // ======== FUNKCJA RC PILOT ============
 void rc_pilot() {
   Serial.println("Tryb RC: START");
@@ -166,10 +226,10 @@ void rc_pilot() {
     //ps2x.read_gamepad(false, 0);
     if (millis() - lastRead >= 100) {
       ps2x.read_gamepad(false, 0);
-      lastRead = millis();}
+      lastRead = millis();
+    }
     // Detekcja odległości
     uint16_t dystans = odleglosc();
-
     // Histereza: tylko raz przy zbliżeniu, reset przy oddaleniu
     if (dystans < 250 && !obiektBlisko) {
       Serial2.println("#SYST:PLAY:2:21;");
@@ -194,6 +254,18 @@ void rc_pilot() {
       wasCrossPressed = false;
       break;
     }
+    // losowe dzwieki r2d2
+    if (ps2x.Button(PSB_SQUARE)) {
+      wasSquarePressed = true;
+    } else if (wasSquarePressed) {
+      losowanyNumer = random(1, 13);  // 1–12 włącznie
+      String komenda = "#R2D2:PLAY:" + String(losowanyNumer) + ":12;";
+      Serial2.println(komenda);
+      Serial.print("🔊 Wysłano polecenie: ");
+      Serial.println(komenda);
+      wasSquarePressed = false;
+    }
+
 
     // Sterowanie – joystick
     int joyY = ps2x.Analog(PSS_LY);
@@ -201,13 +273,15 @@ void rc_pilot() {
     int joyZ = ps2x.Analog(PSS_RX);
     pozycja_k = motorK.currentPosition();
 
-    bool neutralY = abs(joyY - 128) < 10;
-    bool neutralX = abs(joyX - 128) < 10;
-    bool neutralZ = abs(joyZ - 128) < 10;
+    bool neutralY = abs(joyY - 128) < 15;
+    bool neutralX = abs(joyX - 128) < 15;
+    bool neutralZ = abs(joyZ - 128) < 15;
 
     if (neutralY && neutralX) {
       motorL.disableOutputs();
       motorR.disableOutputs();
+      motorL.setSpeed(0);
+      motorR.setSpeed(0);
     } else {
       motorL.enableOutputs();
       motorR.enableOutputs();
@@ -215,6 +289,8 @@ void rc_pilot() {
       int turn = map(joyX, 0, 255, -1000, 1000);
       motorL.setSpeed(speed + turn);
       motorR.setSpeed(speed - turn);
+      motorL.runSpeed();
+      motorR.runSpeed();
     }
 
     if (neutralZ) {
@@ -224,15 +300,19 @@ void rc_pilot() {
       int speed_k = map(joyZ, 0, 255, 1000, -1000);
       long aktualnaPozycja = motorK.currentPosition();
       bool dozwolonyRuch =
-          (speed_k > 0 && aktualnaPozycja < 2048) ||
-          (speed_k < 0 && aktualnaPozycja > -2048);
+        (speed_k > 0 && aktualnaPozycja < 2048) || (speed_k < 0 && aktualnaPozycja > -2048);
 
       if (dozwolonyRuch) {
         motorK.enableOutputs();
         motorK.setSpeed(speed_k);
+        motorK.runSpeed();
+        motorL.runSpeed();
+        motorR.runSpeed();
       } else {
         motorK.disableOutputs();
         motorK.setSpeed(0);
+        motorL.runSpeed();
+        motorR.runSpeed();
       }
     }
 
@@ -240,6 +320,10 @@ void rc_pilot() {
     motorL.runSpeed();
     motorR.runSpeed();
     motorK.runSpeed();
+    zasilanie();
+    //motorL.runSpeed();
+    //motorR.runSpeed();
+    //motorK.runSpeed();
   }
 
   // Po wyjściu:
@@ -301,7 +385,7 @@ void ps2xFlush() {
 #define FILTR_OKNO 5
 
 uint16_t odleglosc() {
-  static uint16_t pomiary[FILTR_OKNO] = {9999};
+  static uint16_t pomiary[FILTR_OKNO] = { 9999 };
   static int index = 0;
   static uint32_t ostatniPomiar = 0;
 
@@ -319,4 +403,43 @@ uint16_t odleglosc() {
     suma += pomiary[i];
   }
   return suma / FILTR_OKNO;
+}
+// odczyt zasilania
+void zasilanie() {
+  float shuntvoltage = 0;
+  float busvoltage = 0;
+  float current_mA = 0;
+  float loadvoltage = 0;
+  float power_mW = 0;
+
+  static uint32_t ostatniPomiar = 0;
+
+  // Odstęp między pomiarami (w ms)
+  if (millis() - ostatniPomiar >= 10000) {
+
+
+    shuntvoltage = ina219.getShuntVoltage_mV();
+    busvoltage = ina219.getBusVoltage_V();
+    current_mA = ina219.getCurrent_mA();
+    power_mW = ina219.getPower_mW();
+    loadvoltage = busvoltage + (shuntvoltage / 1000);
+
+    Serial.print("Bus Voltage:   ");
+    Serial.print(busvoltage);
+    Serial.println(" V");
+    Serial.print("Shunt Voltage: ");
+    Serial.print(shuntvoltage);
+    Serial.println(" mV");
+    Serial.print("Load Voltage:  ");
+    Serial.print(loadvoltage);
+    Serial.println(" V");
+    Serial.print("Current:       ");
+    Serial.print(current_mA);
+    Serial.println(" mA");
+    Serial.print("Power:         ");
+    Serial.print(power_mW);
+    Serial.println(" mW");
+    Serial.println("");
+    ostatniPomiar = millis();
+  }
 }
