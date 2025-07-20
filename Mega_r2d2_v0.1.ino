@@ -2,9 +2,14 @@
 #include <PS2X_lib.h>
 #include "Adafruit_VL53L0X.h"
 #include <Adafruit_INA219.h>
+#include <Adafruit_BNO08x.h>
+
 
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 Adafruit_INA219 ina219;
+#define BNO08X_RESET -1
+Adafruit_BNO08x bno08x(BNO08X_RESET);
+sh2_SensorValue_t sensorValue;
 
 // 3 silniki: lewy i prawy, kopułka
 AccelStepper motorL(AccelStepper::HALF4WIRE, 9, 7, 8, 6);      // lewy
@@ -89,6 +94,18 @@ void setup() {
     while (1)
       ;
   }
+  //bBNO085
+  if (!bno08x.begin_I2C()) {
+    Serial.println("Nie znaleziono BNO08x");
+    while (1)
+      ;
+  }
+  Serial.println("BNO08x OK");
+
+  // Rotation vector = yaw/pitch/roll względem północy (z magnetometrem)
+  bno08x.enableReport(SH2_ROTATION_VECTOR);
+  delay(100);
+
   // procedury startowe
   autostart();
   ps2xFlush();
@@ -134,6 +151,7 @@ void loop() {
     wasCirclePressed = true;
   } else if (wasCirclePressed) {
     Serial.println("Koło");
+    digitalWrite(PIN_A12, LOW);
     wasCirclePressed = false;
   }
 
@@ -441,5 +459,33 @@ void zasilanie() {
     Serial.println(" mW");
     Serial.println("");
     ostatniPomiar = millis();
+  }
+}
+void pozycja() {
+  if (!bno08x.getSensorEvent(&sensorValue)) return;
+
+  if (sensorValue.sensorId == SH2_ROTATION_VECTOR) {
+    float qw = sensorValue.un.rotationVector.real;
+    float qx = sensorValue.un.rotationVector.i;
+    float qy = sensorValue.un.rotationVector.j;
+    float qz = sensorValue.un.rotationVector.k;
+
+    // Przeliczanie quaternion → yaw/pitch/roll
+    float yaw = atan2(2.0f * (qw * qz + qx * qy),
+                      1.0f - 2.0f * (qy * qy + qz * qz))
+                * 180.0f / PI;
+    float pitch = asin(2.0f * (qw * qy - qz * qx)) * 180.0f / PI;
+    float roll = atan2(2.0f * (qw * qx + qy * qz),
+                       1.0f - 2.0f * (qx * qx + qy * qy))
+                 * 180.0f / PI;
+
+    if (yaw < 0) yaw += 360;
+
+    Serial.print("Yaw: ");
+    Serial.print(yaw, 1);
+    Serial.print("°, Pitch: ");
+    Serial.print(pitch, 1);
+    Serial.print("°, Roll: ");
+    Serial.println(roll, 1);
   }
 }
