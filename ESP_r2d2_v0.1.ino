@@ -1,3 +1,4 @@
+#include "dane_wifi.h" // pass i hasło wifi
 #include <SPI.h>
 #include "FS.h"
 #include "SD.h"
@@ -5,13 +6,12 @@
 #include <Wire.h>
 #include <ESP32Time.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
-//#include <ESPping.h>
-//include <Ping.h>
 #include "Audio.h"  // usunieto w biliotece Sd.h
 #include <Preferences.h>
-
-
+#include <WebSocketsServer.h>
+// wi fi dane - bez pliku #include "dane_wifi.h" odremować 
+//const char* ssid = "nazwa sieci";
+//onst char* password = "hasło";
 
 //----------------------------------
 
@@ -25,6 +25,7 @@ byte volume = 14;
 byte koniec_mp3 = 0;
 String gramy_mp3;
 int nr_mp3 = 1;
+String buffer = "";
 //-----------------------------------
 //----------------------------
 //blok karty SD
@@ -35,46 +36,117 @@ int nr_mp3 = 1;
 #define SD_CS 5
 File plik;
 //----------------------------
+// lan socket
+WebSocketsServer webSocket = WebSocketsServer(81);  // port 81
+// init sd card
+bool initSDCard(int maxRetries = 6, int retryDelay = 500) {
+  for (int i = 0; i < maxRetries; i++) {
+    if (SD.begin(SD_CS)) {
+      Serial.println("SD card mounted successfully.");
+      return true;
+    }
+    Serial.println("SD mount failed. Retrying...");
+    delay(retryDelay);
+  }
+  return false;
+}
+// ewenty na wifi
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.printf("[WebSocket] Połączono z klientem #%u\n", num);
+      break;
 
+    case WStype_DISCONNECTED:
+      Serial.printf("[WebSocket] Rozłączono klienta #%u\n", num);
+      break;
+
+    case WStype_TEXT:
+      Serial.printf("[WebSocket] Otrzymano dane: %s\n", payload);
+
+      // Odpowiedź (echo)
+      webSocket.sendTXT(num, "OK: " + String((char*)payload));
+      break;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, 16, 17); // RX=16, TX=17
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);  // RX=16, TX=17
+
+  // --- Start WiFi ---
+  Serial.println("Start WiFi...");
+  WiFi.begin(ssid, password);
+
+  int x = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    x++;
+    Serial.println(x);
+    if (x > 20) {
+      Serial.println("WiFi fail — restart ESP32");
+      ESP.restart();  // restart po 10 sekundach
+    }
+  }
+  Serial.println("WiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+  Serial.println("WebSocket serwer uruchomiony na porcie 81");
+  Serial2.println("#SYST:WIFI_OK;");
   // SD start
   Serial.println("SD start");
   SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
   delay(100);
-  if (!SD.begin(SD_CS)) {
-    Serial.println("SD Card MOUNT FAIL");
-    return;
+  if (!initSDCard()) {
+    Serial.println("SD Card MOUNT FAIL after retries. Restarting ESP32...");
+    delay(1000);
+    ESP.restart();  // automatyczny restart
   }
-  uint32_t cardSize = SD.cardSize() / (1024 * 1024);
-  String str = "SDCard Size: " + String(cardSize) + "MB";
-  Serial.println(str);
   // audio  start
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-  audio.setVolume(volume); // default 0...21
+  audio.setVolume(volume);  // default 0...21
   Serial.println("OK-RADIO");
   //  or alternative
   //audio.setVolumeSteps(100);  // max 255
- // audio.setVolume(volume);
+  // audio.setVolume(volume);
   delay(100);
   gramy_mp3 = "/mp3/1.mp3";
   audio.connecttoFS(SD, gramy_mp3.c_str());
 }
 
 void loop() {
-    if (Serial2.available()) {
-    String cmd = Serial2.readStringUntil(';'); // czytamy do znaku końca
-    Serial2.println(cmd);
-    cmd.trim();
-    if (cmd.startsWith("#")) {
-      handleCommand(cmd.substring(1)); // usuń #
+  webSocket.loop();
+  audio.loop();  // obsługa dźwięku – musi być wysoko
+
+  // Nowe: czytaj linia po linii z Serial2
+  while (Serial2.available()) {
+    String line = Serial2.readStringUntil('\n');
+    line.trim();
+
+    if (line.length() == 0) continue;  // pomiń puste
+
+    Serial.println("⮩ ODEBRANE: " + line);
+
+    if (!line.startsWith("#")) {
+      Serial.println("⚠️ Pominięto nieznaną ramkę: " + line);
+      continue;
+    }
+
+    Serial.println("📡 Otrzymano dane: " + line);
+    webSocket.broadcastTXT(line);
+
+    // Obsłuż tylko PLAY, STOP, SYST – reszta to telemetryczne dane
+    if (line.startsWith("#R2D2:") || line.startsWith("#SYST:")) {
+      handleCommand(line.substring(1));  // bez #
     }
   }
-
-  audio.loop(); // ważne – ciągła obsługa audio
 }
+
+
+
+
 
 void handleCommand(String cmd) {
   // R2D2:PLAY:4:15

@@ -106,6 +106,21 @@ void setup() {
   bno08x.enableReport(SH2_ROTATION_VECTOR);
   delay(100);
 
+  Serial.println("⏳ Oczekiwanie na gotowość ESP32 (WiFi)...");
+
+  while (true) {
+    if (Serial2.available()) {
+      String msg = Serial2.readStringUntil(';');
+      msg.trim();
+      if (msg == "#SYST:WIFI_OK") {
+        Serial.println("✅ ESP32 potwierdził połączenie z WiFi.");
+        break;
+      }
+    }
+    delay(100);  // krótka pauza, by nie zamulić loopa
+  }
+
+
   // procedury startowe
   autostart();
   ps2xFlush();
@@ -230,6 +245,7 @@ void rc_pilot() {
   Serial.println("Tryb RC: START");
 
   bool obiektBlisko = false;
+  unsigned long lastDistSend = 0;
 
   // Stabilizacja – zapełnienie bufora filtrowanego
   uint32_t start = millis();
@@ -256,6 +272,34 @@ void rc_pilot() {
       Serial.println(" mm) – komunikat wysłany");
       obiektBlisko = true;
     }
+
+if (millis() - lastDistSend >= 500) {
+  lastDistSend = millis();
+
+  float yaw = 0.0;
+  if (bno08x.getSensorEvent(&sensorValue) &&
+      sensorValue.sensorId == SH2_ROTATION_VECTOR) {
+    float qw = sensorValue.un.rotationVector.real;
+    float qx = sensorValue.un.rotationVector.i;
+    float qy = sensorValue.un.rotationVector.j;
+    float qz = sensorValue.un.rotationVector.k;
+    yaw = atan2(2.0f * (qw * qz + qx * qy),
+                1.0f - 2.0f * (qy * qy + qz * qz)) * 180.0f / PI;
+    if (yaw < 0) yaw += 360;
+  }
+
+  float shuntvoltage = ina219.getShuntVoltage_mV();
+  float busvoltage = ina219.getBusVoltage_V();
+  float loadvoltage = busvoltage + (shuntvoltage / 1000);
+
+ String msg = "#DATA:DIST=" + String(dystans) +
+             ";YAW=" + String(yaw, 1) +
+             ";V=" + String(loadvoltage, 2) + ";";
+Serial2.println(msg);
+Serial.print("Wysyłam pakiet: ");
+Serial.println(msg);
+}
+
 
     if (dystans > 350 && obiektBlisko) {
       Serial.print("📏 Oddalenie (");
@@ -303,7 +347,7 @@ void rc_pilot() {
     } else {
       motorL.enableOutputs();
       motorR.enableOutputs();
-      int speed = map(joyY, 0, 255, 1000, -1000);
+      int speed = map(joyY, 0, 255, -1000, 1000);
       int turn = map(joyX, 0, 255, -1000, 1000);
       motorL.setSpeed(speed + turn);
       motorR.setSpeed(speed - turn);
