@@ -1,4 +1,4 @@
-#include "dane_wifi.h" // pass i hasło wifi
+#include "dane_wifi.h"  // pass i hasło wifi
 #include <SPI.h>
 #include "FS.h"
 #include "SD.h"
@@ -9,7 +9,7 @@
 #include "Audio.h"  // usunieto w biliotece Sd.h
 #include <Preferences.h>
 #include <WebSocketsServer.h>
-// wi fi dane - bez pliku #include "dane_wifi.h" odremować 
+// wi fi dane - bez pliku #include "dane_wifi.h" odremować
 //const char* ssid = "nazwa sieci";
 //onst char* password = "hasło";
 
@@ -72,7 +72,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, 16, 17);  // RX=16, TX=17
+  Serial2.begin(57600, SERIAL_8N1, 16, 17);  // RX=16, TX=17
 
   // --- Start WiFi ---
   Serial.println("Start WiFi...");
@@ -120,26 +120,39 @@ void loop() {
   webSocket.loop();
   audio.loop();  // obsługa dźwięku – musi być wysoko
 
-  // Nowe: czytaj linia po linii z Serial2
+  // Bufor znaków
+  static String serialBuffer = "";
+
   while (Serial2.available()) {
-    String line = Serial2.readStringUntil('\n');
-    line.trim();
+    char ch = (char)Serial2.read();
 
-    if (line.length() == 0) continue;  // pomiń puste
+    if (ch == '\n') {
+      serialBuffer.trim();
 
-    Serial.println("⮩ ODEBRANE: " + line);
+      if (serialBuffer.length() > 0) {
+        Serial.println("⮩ ODEBRANE: " + serialBuffer);
 
-    if (!line.startsWith("#")) {
-      Serial.println("⚠️ Pominięto nieznaną ramkę: " + line);
-      continue;
-    }
+        if (serialBuffer.startsWith("#")) {
+          Serial.println("📡 Otrzymano dane: " + serialBuffer);
+          webSocket.broadcastTXT(serialBuffer);
 
-    Serial.println("📡 Otrzymano dane: " + line);
-    webSocket.broadcastTXT(line);
+          if (serialBuffer.startsWith("#R2D2:") || serialBuffer.startsWith("#SYST:")) {
+            handleCommand(serialBuffer.substring(1));
+          }
+        } else {
+          Serial.println("⚠️ Pominięto nieznaną ramkę: " + serialBuffer);
+        }
+      }
 
-    // Obsłuż tylko PLAY, STOP, SYST – reszta to telemetryczne dane
-    if (line.startsWith("#R2D2:") || line.startsWith("#SYST:")) {
-      handleCommand(line.substring(1));  // bez #
+      serialBuffer = "";  // wyczyść bufor po każdej linii
+    } else {
+      // Dopisuj tylko, jeśli nie przepełniamy RAMu
+      if (serialBuffer.length() < 256) {
+        serialBuffer += ch;
+      } else {
+        Serial.println("❌ Przepełnienie bufora Serial2! Resetuję bufor.");
+        serialBuffer = "";
+      }
     }
   }
 }
