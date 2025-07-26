@@ -20,13 +20,14 @@ def log(text):
 
 def on_message(ws, message):
     if message.startswith("#DATA:"):
-        match = re.search(r"DIST=(\d+);YAW=([\d\.]+);V=([\d\.]+);", message)
+        match = re.search(r"DIST_K=(\d+);DIST=(\d+);YAW=([\d\.]+);V=([\d\.]+);", message)
         if match:
-            dist = match.group(1)
-            yaw = match.group(2)
-            voltage = match.group(3)
-            update_gui(dist, yaw, voltage)
-            log(f"[DATA] DIST={dist}, YAW={yaw}, V={voltage}")
+            dist_k = match.group(1)  # Kopułka
+            dist = match.group(2)    # Gondola
+            yaw = match.group(3)
+            voltage = match.group(4)
+            update_gui(dist_k, dist, yaw, voltage)
+            log(f"[DATA] Kopułka={dist_k} mm, Gondola={dist} mm, YAW={yaw}, V={voltage}")
     else:
         log(f"[MSG] {message}")
 
@@ -56,8 +57,9 @@ def start_websocket():
 
 # === GUI ===
 
-def update_gui(dist, yaw, voltage):
-    dist_var.set(dist + " mm")
+def update_gui(dist_k, dist, yaw, voltage):
+    kopulka_var.set(dist_k + " mm")
+    gondola_var.set(dist + " mm")
     yaw_var.set(yaw + "°")
     voltage_var.set(voltage + " V")
 
@@ -81,12 +83,16 @@ def toggle_rc_mode():
 
 root = tk.Tk()
 root.title("R2D2 Telemetria")
-root.geometry("350x450")
+root.geometry("350x520")
 root.resizable(False, False)
 
-tk.Label(root, text="DIST:", font=("Arial", 14)).pack(pady=2)
-dist_var = tk.StringVar()
-tk.Label(root, textvariable=dist_var, font=("Arial", 14)).pack()
+tk.Label(root, text="Kopułka:", font=("Arial", 14)).pack(pady=2)
+kopulka_var = tk.StringVar()
+tk.Label(root, textvariable=kopulka_var, font=("Arial", 14)).pack()
+
+tk.Label(root, text="Gondola:", font=("Arial", 14)).pack(pady=2)
+gondola_var = tk.StringVar()
+tk.Label(root, textvariable=gondola_var, font=("Arial", 14)).pack()
 
 tk.Label(root, text="YAW:", font=("Arial", 14)).pack(pady=2)
 yaw_var = tk.StringVar()
