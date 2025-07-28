@@ -46,7 +46,6 @@ static bool wasPadDown = false;
 static bool wasPadLeft = false;
 static bool wasPadRight = false;
 long pozycja_k = 0;
-
 #define PIN_A12 66          // zasilanie off
 const int czujnikPin = 34;  // szczelinowy
 // logika
@@ -62,6 +61,7 @@ void kwadrat_demo();
 void kurs(float odleglosc_cm, float kursDocelowy, bool tyl = false);
 float yawRelative();
 void setID();
+
 
 void setup() {
   Serial.begin(115200);
@@ -271,7 +271,6 @@ void loop() {
   }
   led_neo(1);
 }
-
 // Sprawdzenie czy koniec utworu
 byte czekajNaDone() {
   static bool done = false;
@@ -380,41 +379,28 @@ void rc_pilot() {
       lastRead = millis();
     }
 
-    uint16_t dystans_k = odleglosc_k(); // górny kapsulka
-    uint16_t dystans = odleglosc();    // dolny gondola
+    uint16_t dystans_k = odleglosc_k();  // górny kapsulka
+    uint16_t dystans = odleglosc();      // dolny gondola
 
     if (dystans < 250 && !obiektBlisko) {
       Serial2.println("#SYST:PLAY:2:21;");
-      Serial.print("📏 Zbliżenie (");
-      Serial.print(dystans);
-      Serial.println(" mm) – komunikat wysłany");
+      //Serial.print("📏 Zbliżenie (");
+      //Serial.print(dystans);
+      //Serial.println(" mm) – komunikat wysłany");
       obiektBlisko = true;
     }
 
     if (millis() - lastDistSend >= 500) {
       lastDistSend = millis();
-
       float yaw = yawRelative();
-
-      float shuntvoltage = ina219.getShuntVoltage_mV();
-      float busvoltage = ina219.getBusVoltage_V();
-      float loadvoltage = busvoltage + (shuntvoltage / 1000);
-
-      String msg = "#DATA:DIST_K=" + String(dystans_k) + ";DIST=" + String(dystans) + ";YAW=" + String(yaw, 1) + ";V=" + String(loadvoltage, 2) + ";";
-
-      if (Serial2.availableForWrite() > msg.length() + 2) {
-        Serial2.println(msg);
-      } else {
-        Serial.println("⚠️ Serial2 bufor pełny – pominięto pakiet");
-      }
-      Serial.print("Wysyłam pakiet: ");
-      Serial.println(msg);
+      telemetria(dystans_k, dystans);
     }
 
+
     if (dystans > 350 && obiektBlisko) {
-      Serial.print("📏 Oddalenie (");
-      Serial.print(dystans);
-      Serial.println(" mm) – reset zatrzasku");
+      //Serial.print("📏 Oddalenie (");
+      //Serial.print(dystans);
+      //Serial.println(" mm) – reset zatrzasku");
       obiektBlisko = false;
     }
 
@@ -432,8 +418,8 @@ void rc_pilot() {
       losowanyNumer = random(1, 13);
       String komenda = "#R2D2:PLAY:" + String(losowanyNumer) + ":12;";
       Serial2.println(komenda);
-      Serial.print("🔊 Wysłano polecenie: ");
-      Serial.println(komenda);
+      //Serial.print("🔊 Wysłano polecenie: ");
+      //Serial.println(komenda);
       wasSquarePressed = false;
     }
 
@@ -604,9 +590,9 @@ void zasilanie() {
     float shuntvoltage = ina219.getShuntVoltage_mV();
     float loadvoltage = busvoltage + (shuntvoltage / 1000.0);
 
-    Serial.print("🔋 Napięcie: ");
-    Serial.print(loadvoltage, 2);
-    Serial.println(" V");
+    //Serial.print("🔋 Napięcie: ");
+    //Serial.print(loadvoltage, 2);
+    //Serial.println(" V");
 
     if (loadvoltage < 6.6 && !krytyczneNapiecieZgloszone) {
       Serial2.println("#SYST:PLAY:4:21;");
@@ -855,7 +841,7 @@ void led_neo(uint8_t effect) {
 
   switch (effect) {
 
-    case 1: // 🌈 Tęczowy gradient
+    case 1:  // 🌈 Tęczowy gradient
       if (currentMillis - lastUpdate >= 40) {
         lastUpdate = currentMillis;
         uint32_t color = pixels.ColorHSV(hue * 256);
@@ -865,7 +851,7 @@ void led_neo(uint8_t effect) {
       }
       break;
 
-    case 2: // 🚨 Miganie czerwone
+    case 2:  // 🚨 Miganie czerwone
       if (currentMillis - lastUpdate >= 300) {
         lastUpdate = currentMillis;
         on = !on;
@@ -874,7 +860,7 @@ void led_neo(uint8_t effect) {
       }
       break;
 
-    case 3: // 💖 Różowy fade
+    case 3:  // 💖 Różowy fade
       if (currentMillis - lastUpdate >= 30) {
         lastUpdate = currentMillis;
         brightness += fadeDirection * 5;
@@ -884,7 +870,7 @@ void led_neo(uint8_t effect) {
       }
       break;
 
-    case 4: // ⚡ Stroboskop niebieski
+    case 4:  // ⚡ Stroboskop niebieski
       if (currentMillis - lastUpdate >= 100) {
         lastUpdate = currentMillis;
         on = !on;
@@ -893,7 +879,7 @@ void led_neo(uint8_t effect) {
       }
       break;
 
-    case 5: // 🎲 Losowe kolory
+    case 5:  // 🎲 Losowe kolory
       if (currentMillis - lastUpdate >= 300) {
         lastUpdate = currentMillis;
         uint8_t r = random(0, 256);
@@ -904,7 +890,7 @@ void led_neo(uint8_t effect) {
       }
       break;
 
-    case 6: // 🌊 Pulsujący niebieski
+    case 6:  // 🌊 Pulsujący niebieski
       if (currentMillis - lastUpdate >= 25) {
         lastUpdate = currentMillis;
         brightness += fadeDirection * 4;
@@ -914,10 +900,10 @@ void led_neo(uint8_t effect) {
       }
       break;
 
-    case 7: // 🍃 Oddech zielony
+    case 7:  // 🍃 Oddech zielony
       if (currentMillis - lastUpdate >= 10) {
         lastUpdate = currentMillis;
-        float breathe = (sin(millis() / 1000.0 * 2 * PI) + 1) / 2; // 0–1
+        float breathe = (sin(millis() / 1000.0 * 2 * PI) + 1) / 2;  // 0–1
         int val = (int)(breathe * 255);
         pixels.setPixelColor(0, pixels.Color(0, val, 0));
         pixels.show();
@@ -925,8 +911,35 @@ void led_neo(uint8_t effect) {
       break;
 
     default:
-      pixels.setPixelColor(0, 0); // Wyłącz
+      pixels.setPixelColor(0, 0);  // Wyłącz
       pixels.show();
       break;
+  }
+}
+
+void telemetria(uint16_t dystans_k, uint16_t dystans) {
+  static unsigned long lastDistSend = 0;
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - lastDistSend >= 500) {
+    lastDistSend = currentMillis;
+
+    float yaw = yawRelative();
+
+    float shuntvoltage = ina219.getShuntVoltage_mV();
+    float busvoltage = ina219.getBusVoltage_V();
+    float loadvoltage = busvoltage + (shuntvoltage / 1000);
+    float current_mA = ina219.getCurrent_mA();
+
+    String msg = "#DATA:DIST_K=" + String(dystans_k) + ";DIST=" + String(dystans) + ";YAW=" + String(yaw, 1) + ";V=" + String(loadvoltage, 2) + ";I=" + String(current_mA, 0) + ";";
+
+    if (Serial2.availableForWrite() > msg.length() + 2) {
+      Serial2.println(msg);
+    } else {
+      Serial.println("⚠️ Serial2 bufor pełny – pominięto pakiet");
+    }
+
+    Serial.print("Wysyłam pakiet: ");
+    Serial.println(msg);
   }
 }
