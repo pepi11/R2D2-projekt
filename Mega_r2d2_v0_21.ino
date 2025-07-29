@@ -55,12 +55,13 @@ int losowanyNumer = 0;
 float yawOffset = 0.0;
 // deklaracje funkcji
 
-void L_prosta(bool doTylu = false);
-void kat_90(bool wLewo = false);
+void L_prosta(float cm, bool doTylu = false);
+void kat_dowolny(float kat, bool wLewo = false);
 void kwadrat_demo();
 void kurs(float odleglosc_cm, float kursDocelowy, bool tyl = false);
 float yawRelative();
 void setID();
+void audio(int efekt, int glosnosc = 18);
 
 
 void setup() {
@@ -174,7 +175,7 @@ void loop() {
   if (ps2x.Button(PSB_PAD_UP)) {
     wasPadUp = true;
   } else if (wasPadUp) {
-    L_prosta(false);  // przód
+    L_prosta(20.0, false);  // 20 cm do przodu
     wasPadUp = false;
   }
 
@@ -182,7 +183,7 @@ void loop() {
   if (ps2x.Button(PSB_PAD_DOWN)) {
     wasPadDown = true;
   } else if (wasPadDown) {
-    L_prosta(true);  // tył
+    L_prosta(20, true);  // 20 cm do tyłu
     wasPadDown = false;
   }
 
@@ -190,7 +191,7 @@ void loop() {
   if (ps2x.Button(PSB_PAD_LEFT)) {
     wasPadLeft = true;
   } else if (wasPadLeft) {
-    kat_90(true);  // w lewo
+    kat_dowolny(90, true);  // w lewo
     wasPadLeft = false;
   }
 
@@ -198,7 +199,7 @@ void loop() {
   if (ps2x.Button(PSB_PAD_RIGHT)) {
     wasPadRight = true;
   } else if (wasPadRight) {
-    kat_90(false);  // w prawo
+    kat_dowolny(90, false);  // w prawo
     wasPadRight = false;
   }
 
@@ -234,7 +235,6 @@ void loop() {
     wasCirclePressed = true;
   } else if (wasCirclePressed) {
     Serial.println("Koło");
-    kurs(60.0, 110.0, false);
     wasCirclePressed = false;
   }
 
@@ -554,7 +554,7 @@ uint16_t odleglosc() {
   }
   return suma / FILTR_OKNO;
 }
-// czytnik dolny vl54lox
+// czytnik górny kopułka
 #define FILTR_OKNO_k 5
 
 uint16_t odleglosc_k() {
@@ -624,11 +624,15 @@ void zasilanie() {
 
 
 
-// 90 stopni prawo lewo
 //-------------------------------------------------------
-void kat_90(bool wLewo = false) {
+void kat_dowolny(float kat, bool wLewo = false) {
+  if (kat <= 0.0 || kat >= 360.0) {
+    Serial.println("⚠️ Nieprawidłowy kąt obrotu. Musi być > 0 i < 360.");
+    return;
+  }
+  unsigned long lastDistSend = 0;
   float aktualnyYaw = yawRelative();
-  float offset = wLewo ? 88.0 : -88.0;
+  float offset = wLewo ? kat : -kat;
   float celYaw = fmod((aktualnyYaw + offset + 360.0), 360.0);
 
   Serial.print(wLewo ? "↩️ Obrót w LEWO do yaw = " : "↪️ Obrót w PRAWO do yaw = ");
@@ -649,6 +653,16 @@ void kat_90(bool wLewo = false) {
     motorL.runSpeed();
     motorR.runSpeed();
 
+    uint16_t dystans_k = odleglosc_k();  // górny kapsulka
+    uint16_t dystans = odleglosc();      // dolny gondola
+
+    if (millis() - lastDistSend >= 500) {
+      lastDistSend = millis();
+      float yaw = yawRelative();
+      telemetria(dystans_k, dystans);
+    }
+
+
     if (roznica <= 1.0 || roznica >= 359.0) break;
   }
 
@@ -657,19 +671,27 @@ void kat_90(bool wLewo = false) {
   motorL.disableOutputs();
   motorR.disableOutputs();
   ps2xFlush();
-  Serial.println("✅ Obrót 90° zakończony");
+  Serial.println("✅ Obrót zakończony");
 }
 
+// po linii prostej dowolna odleglość dowolna
+void L_prosta(float cm, bool doTylu = false) {
+  if (cm <= 0) {
+    Serial.println("⚠️ Długość musi być większa niż 0 cm.");
+    return;
+  }
 
-// 20 cm do tyłu i przodu
-void L_prosta(bool doTylu = false) {
-  Serial.println(doTylu ? "⬅️ Jazda do tyłu 20 cm..." : "➡️ Jazda do przodu 20 cm...");
+  Serial.print(doTylu ? "⬅️ Jazda do tyłu " : "➡️ Jazda do przodu ");
+  Serial.print(cm, 1);
+  Serial.println(" cm...");
 
-  const long krokiDoPrzejazdu = 8530;  // dla 20 cm
+  unsigned long lastDistSend = 0;
+  const float krokiNaCm = 426.5;  // 8530 kroków dla 20 cm → 8530 / 20 = 426.5
   const float histereza = 1.0;
   const int predkosc = 1000;
   const int korekta = 50;
 
+  long krokiDoPrzejazdu = cm * krokiNaCm;
   float startYaw = yawRelative();
 
   motorL.setCurrentPosition(0);
@@ -679,8 +701,8 @@ void L_prosta(bool doTylu = false) {
 
   while (abs(motorL.currentPosition()) < krokiDoPrzejazdu) {
     float yawNow = yawRelative();
-
     float blad = yawNow - startYaw;
+
     if (blad > 180) blad -= 360;
     if (blad < -180) blad += 360;
 
@@ -700,6 +722,15 @@ void L_prosta(bool doTylu = false) {
     motorR.setSpeed(speedR);
     motorL.runSpeed();
     motorR.runSpeed();
+    
+    uint16_t dystans_k = odleglosc_k();  // górny kapsulka
+    uint16_t dystans = odleglosc();      // dolny gondola
+
+    if (millis() - lastDistSend >= 500) {
+      lastDistSend = millis();
+      float yaw = yawRelative();
+      telemetria(dystans_k, dystans);
+    }
   }
 
   motorL.setSpeed(0);
@@ -709,6 +740,7 @@ void L_prosta(bool doTylu = false) {
   ps2xFlush();
   Serial.println("✅ Jazda zakończona.");
 }
+
 
 // jazda po kursie
 void kurs(float odleglosc_cm, float kursDocelowy, bool tyl = false) {
@@ -942,4 +974,21 @@ void telemetria(uint16_t dystans_k, uint16_t dystans) {
     Serial.print("Wysyłam pakiet: ");
     Serial.println(msg);
   }
+}
+// obsluga dzwięków r2d2
+void audio(int efekt, int glosnosc = 18) {
+  // Ograniczanie parametrów do dozwolonego zakresu
+  if (glosnosc < 0) glosnosc = 0;
+  if (glosnosc > 21) glosnosc = 21;
+  if (efekt < 1) efekt = 1;  // Zakładamy, że 0 też może być dozwolony
+
+  // Tworzenie komendy
+  String komenda = "#R2D2:PLAY:" + String(efekt) + ":" + String(glosnosc) + ";";
+
+  // Wysłanie przez Serial2
+  Serial2.println(komenda);
+
+  // Log na konsoli
+  Serial.print("🔊 Wysłano komendę audio: ");
+  Serial.println(komenda);
 }
